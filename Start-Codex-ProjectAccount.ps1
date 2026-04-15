@@ -35,6 +35,50 @@ function Get-CodexExecutable {
     throw "Could not find a Codex executable. Install Codex CLI first."
 }
 
+function Test-CodexSupportsDeviceAuth {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$CodexExecutable
+    )
+
+    $helpOutput = & $CodexExecutable login --help 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        return $false
+    }
+
+    return ($helpOutput | Out-String) -match "--device-auth"
+}
+
+function Select-LoginMethod {
+    param(
+        [Parameter(Mandatory = $true)]
+        [bool]$SupportsDeviceAuth
+    )
+
+    if (-not $SupportsDeviceAuth) {
+        return "api-key"
+    }
+
+    while ($true) {
+        Write-Host "Choose how to authenticate this account:"
+        Write-Host "  1. Sign in with ChatGPT (recommended for ChatGPT Business)"
+        Write-Host "  2. Use an OpenAI API key"
+        Write-Host ""
+
+        $selection = (Read-Host "Choose 1 or 2 (Enter for 1)").Trim()
+        if ([string]::IsNullOrWhiteSpace($selection) -or $selection -eq "1") {
+            return "device-auth"
+        }
+
+        if ($selection -eq "2") {
+            return "api-key"
+        }
+
+        Write-Host "Invalid selection. Enter 1, 2, or press Enter for 1." -ForegroundColor Yellow
+        Write-Host ""
+    }
+}
+
 $accountProfiles = @(
     [pscustomobject]@{
         MenuOption = "1"
@@ -120,6 +164,7 @@ $selectedAccount = Resolve-AccountProfile -RequestedAccountName $AccountName -Pr
 $displayAccountName = $selectedAccount.Label
 $safeAccountName = $selectedAccount.Slug
 $codexExecutable = Get-CodexExecutable
+$supportsDeviceAuth = Test-CodexSupportsDeviceAuth -CodexExecutable $codexExecutable
 
 $accountHome = $selectedAccount.HomePath
 if ([string]::IsNullOrWhiteSpace($accountHome)) {
@@ -139,20 +184,28 @@ if ((Test-Path -LiteralPath $primaryConfig) -and -not (Test-Path -LiteralPath $a
 if (-not (Test-Path -LiteralPath $accountAuth)) {
     Write-Host ""
     Write-Host "No Codex login is stored yet for account '$displayAccountName'."
-    Write-Host "The API key will be used only to create a separate auth cache in:"
+    Write-Host "A separate auth cache will be created in:"
     Write-Host "  $accountHome"
     Write-Host ""
 
-    $secureApiKey = Read-Host "Paste the OpenAI API key for this account" -AsSecureString
-    $plainApiKey = Get-PlainTextFromSecureString -SecureString $secureApiKey
-    if ([string]::IsNullOrWhiteSpace($plainApiKey)) {
-        throw "No API key was provided."
-    }
+    $loginMethod = Select-LoginMethod -SupportsDeviceAuth $supportsDeviceAuth
 
     $previousCodexHome = $env:CODEX_HOME
+    $plainApiKey = $null
     try {
         $env:CODEX_HOME = $accountHome
-        $plainApiKey | & $codexExecutable login --with-api-key
+        if ($loginMethod -eq "device-auth") {
+            & $codexExecutable login --device-auth
+        } else {
+            $secureApiKey = Read-Host "Paste the OpenAI API key for this account" -AsSecureString
+            $plainApiKey = Get-PlainTextFromSecureString -SecureString $secureApiKey
+            if ([string]::IsNullOrWhiteSpace($plainApiKey)) {
+                throw "No API key was provided."
+            }
+
+            $plainApiKey | & $codexExecutable login --with-api-key
+        }
+
         if ($LASTEXITCODE -ne 0) {
             throw "Codex login failed for account '$displayAccountName'."
         }

@@ -26,8 +26,8 @@ On first use for a new account, the launcher:
 
 1. creates the per-account home directory
 2. copies the default `config.toml` from `.codex` if present
-3. asks for the API key for that account
-4. runs `codex login --with-api-key` inside that dedicated account home
+3. prompts for a login method
+4. either runs `codex login --device-auth` for ChatGPT sign-in or `codex login --with-api-key` for API-key auth inside that dedicated account home
 
 After that, launching with the same account name reuses that account-specific auth cache.
 
@@ -67,7 +67,7 @@ Any extra arguments are forwarded to `codex`.
 ## Notes
 
 - This project implements machine-local account separation for Codex CLI.
-- It currently uses API-key login per account profile.
+- It supports either ChatGPT sign-in (`--device-auth`) or API-key login per account profile, depending on what your Codex CLI version supports.
 - The active machine copy was originally found at `C:\Users\USER\Start-Codex-ProjectAccount.ps1`.
 - A future improvement is to add an explicit interactive menu for selecting from known account profiles.
 - A regression test suite should be added for this project as part of the shared project rules.
