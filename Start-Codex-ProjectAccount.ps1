@@ -40,18 +40,21 @@ $accountProfiles = @(
         MenuOption = "1"
         Label = "Aleph General"
         Slug = "aleph-general"
+        HomePath = (Join-Path $HOME ".codex")
         Aliases = @("1", "aleph general", "aleph-general", "general")
     },
     [pscustomobject]@{
         MenuOption = "2"
         Label = "GTB"
         Slug = "gtb"
+        HomePath = (Join-Path $HOME ".codex-second")
         Aliases = @("2", "gtb", "aleph / gtb", "aleph-gtb", "aleph gtb")
     },
     [pscustomobject]@{
         MenuOption = "3"
         Label = "IE - Imagined Earth"
         Slug = "ie-imagined-earth"
+        HomePath = $null
         Aliases = @("3", "ie", "imagined earth", "ie - imagined earth", "ie-imagined-earth")
     }
 )
@@ -107,6 +110,7 @@ function Resolve-AccountProfile {
         MenuOption = ""
         Label = $RequestedAccountName
         Slug = $customSlug
+        HomePath = $null
         Aliases = @($normalizedRequestedAccountName)
     }
 }
@@ -117,7 +121,10 @@ $displayAccountName = $selectedAccount.Label
 $safeAccountName = $selectedAccount.Slug
 $codexExecutable = Get-CodexExecutable
 
-$accountHome = Join-Path $CodexHomeRoot $safeAccountName
+$accountHome = $selectedAccount.HomePath
+if ([string]::IsNullOrWhiteSpace($accountHome)) {
+    $accountHome = Join-Path $CodexHomeRoot $safeAccountName
+}
 $primaryCodexHome = Join-Path $HOME ".codex"
 $primaryConfig = Join-Path $primaryCodexHome "config.toml"
 $accountConfig = Join-Path $accountHome "config.toml"

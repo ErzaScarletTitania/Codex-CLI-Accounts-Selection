@@ -16,6 +16,12 @@ By default, the launcher now shows an interactive menu with these options before
 2. `GTB`
 3. `IE - Imagined Earth`
 
+The default homes used by those menu options are:
+
+- `Aleph General` -> `C:\Users\USER\.codex`
+- `GTB` -> `C:\Users\USER\.codex-second`
+- `IE - Imagined Earth` -> `C:\Users\USER\.codex-accounts\ie-imagined-earth`
+
 On first use for a new account, the launcher:
 
 1. creates the per-account home directory
