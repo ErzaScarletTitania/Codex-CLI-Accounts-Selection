@@ -23,6 +23,18 @@ function Get-PlainTextFromSecureString {
     }
 }
 
+function Get-CodexExecutable {
+    $candidateCommands = @("codex-real", "codex")
+    foreach ($candidateCommand in $candidateCommands) {
+        $resolvedCommand = Get-Command $candidateCommand -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($null -ne $resolvedCommand) {
+            return $resolvedCommand.Source
+        }
+    }
+
+    throw "Could not find a Codex executable. Install Codex CLI first."
+}
+
 $accountProfiles = @(
     [pscustomobject]@{
         MenuOption = "1"
@@ -103,6 +115,7 @@ $resolvedProjectPath = (Resolve-Path -LiteralPath $ProjectPath).Path
 $selectedAccount = Resolve-AccountProfile -RequestedAccountName $AccountName -Profiles $accountProfiles
 $displayAccountName = $selectedAccount.Label
 $safeAccountName = $selectedAccount.Slug
+$codexExecutable = Get-CodexExecutable
 
 $accountHome = Join-Path $CodexHomeRoot $safeAccountName
 $primaryCodexHome = Join-Path $HOME ".codex"
@@ -132,7 +145,7 @@ if (-not (Test-Path -LiteralPath $accountAuth)) {
     $previousCodexHome = $env:CODEX_HOME
     try {
         $env:CODEX_HOME = $accountHome
-        $plainApiKey | codex login --with-api-key
+        $plainApiKey | & $codexExecutable login --with-api-key
         if ($LASTEXITCODE -ne 0) {
             throw "Codex login failed for account '$displayAccountName'."
         }
@@ -151,7 +164,7 @@ $exitCode = 0
 try {
     $env:CODEX_HOME = $accountHome
     Push-Location -LiteralPath $resolvedProjectPath
-    & codex @args
+    & $codexExecutable @args
     if ($null -ne $LASTEXITCODE) {
         $exitCode = $LASTEXITCODE
     }

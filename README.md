@@ -28,10 +28,23 @@ After that, launching with the same account name reuses that account-specific au
 ## Files
 
 - `Start-Codex-ProjectAccount.ps1`: main launcher
+- `Install-CodexLauncher.ps1`: installs the launcher as the global `codex` command on this machine
 
 ## Usage
 
-Run from PowerShell:
+Install the global wrapper once:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Install-CodexLauncher.ps1
+```
+
+After that, run from `cmd` or PowerShell:
+
+```powershell
+codex
+```
+
+Or call the launcher directly:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\Start-Codex-ProjectAccount.ps1 -ProjectPath "C:\Users\USER"
