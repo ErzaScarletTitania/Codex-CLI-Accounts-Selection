@@ -10,6 +10,12 @@ Each account gets its own local home under:
 
 - `C:\Users\USER\.codex-accounts\<account-name>`
 
+By default, the launcher now shows an interactive menu with these options before Codex starts:
+
+1. `Aleph General`
+2. `GTB`
+3. `IE - Imagined Earth`
+
 On first use for a new account, the launcher:
 
 1. creates the per-account home directory
@@ -28,13 +34,13 @@ After that, launching with the same account name reuses that account-specific au
 Run from PowerShell:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\Start-Codex-ProjectAccount.ps1 -AccountName personal -ProjectPath "C:\Users\USER"
+powershell -ExecutionPolicy Bypass -File .\Start-Codex-ProjectAccount.ps1 -ProjectPath "C:\Users\USER"
 ```
 
-Example for a project folder:
+You can still bypass the menu by passing `-AccountName` explicitly:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\Start-Codex-ProjectAccount.ps1 -AccountName work -ProjectPath "D:\1. Escritorio\Expenses\AI_Invoice_Generation"
+powershell -ExecutionPolicy Bypass -File .\Start-Codex-ProjectAccount.ps1 -AccountName gtb -ProjectPath "D:\1. Escritorio\Expenses\AI_Invoice_Generation"
 ```
 
 Any extra arguments are forwarded to `codex`.

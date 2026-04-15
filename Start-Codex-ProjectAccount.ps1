@@ -1,5 +1,5 @@
 param(
-    [string]$AccountName = "project-account",
+    [string]$AccountName,
     [string]$ProjectPath = (Get-Location).Path,
     [string]$CodexHomeRoot = "$HOME\\.codex-accounts"
 )
@@ -23,11 +23,86 @@ function Get-PlainTextFromSecureString {
     }
 }
 
-$resolvedProjectPath = (Resolve-Path -LiteralPath $ProjectPath).Path
-$safeAccountName = ($AccountName -replace "[^A-Za-z0-9._-]", "-").Trim("-")
-if ([string]::IsNullOrWhiteSpace($safeAccountName)) {
-    throw "AccountName must contain at least one letter or number."
+$accountProfiles = @(
+    [pscustomobject]@{
+        MenuOption = "1"
+        Label = "Aleph General"
+        Slug = "aleph-general"
+        Aliases = @("1", "aleph general", "aleph-general", "general")
+    },
+    [pscustomobject]@{
+        MenuOption = "2"
+        Label = "GTB"
+        Slug = "gtb"
+        Aliases = @("2", "gtb", "aleph / gtb", "aleph-gtb", "aleph gtb")
+    },
+    [pscustomobject]@{
+        MenuOption = "3"
+        Label = "IE - Imagined Earth"
+        Slug = "ie-imagined-earth"
+        Aliases = @("3", "ie", "imagined earth", "ie - imagined earth", "ie-imagined-earth")
+    }
+)
+
+function Select-AccountProfile {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object[]]$Profiles
+    )
+
+    while ($true) {
+        Write-Host ""
+        Write-Host "Select the Codex account to use:"
+        foreach ($profile in $Profiles) {
+            Write-Host ("  {0}. {1}" -f $profile.MenuOption, $profile.Label)
+        }
+        Write-Host ""
+
+        $selection = (Read-Host "Choose 1, 2, or 3").Trim()
+        $matchedProfile = $Profiles | Where-Object { $_.MenuOption -eq $selection } | Select-Object -First 1
+        if ($null -ne $matchedProfile) {
+            return $matchedProfile
+        }
+
+        Write-Host "Invalid selection. Enter 1, 2, or 3." -ForegroundColor Yellow
+    }
 }
+
+function Resolve-AccountProfile {
+    param(
+        [string]$RequestedAccountName,
+        [Parameter(Mandatory = $true)]
+        [object[]]$Profiles
+    )
+
+    if ([string]::IsNullOrWhiteSpace($RequestedAccountName)) {
+        return Select-AccountProfile -Profiles $Profiles
+    }
+
+    $normalizedRequestedAccountName = $RequestedAccountName.Trim().ToLowerInvariant()
+    foreach ($profile in $Profiles) {
+        if ($profile.Aliases -contains $normalizedRequestedAccountName) {
+            return $profile
+        }
+    }
+
+    $customSlug = ($RequestedAccountName -replace "[^A-Za-z0-9._-]", "-").Trim("-")
+    if ([string]::IsNullOrWhiteSpace($customSlug)) {
+        throw "AccountName must contain at least one letter or number."
+    }
+
+    return [pscustomobject]@{
+        MenuOption = ""
+        Label = $RequestedAccountName
+        Slug = $customSlug
+        Aliases = @($normalizedRequestedAccountName)
+    }
+}
+
+$resolvedProjectPath = (Resolve-Path -LiteralPath $ProjectPath).Path
+$selectedAccount = Resolve-AccountProfile -RequestedAccountName $AccountName -Profiles $accountProfiles
+$displayAccountName = $selectedAccount.Label
+$safeAccountName = $selectedAccount.Slug
 
 $accountHome = Join-Path $CodexHomeRoot $safeAccountName
 $primaryCodexHome = Join-Path $HOME ".codex"
@@ -43,7 +118,7 @@ if ((Test-Path -LiteralPath $primaryConfig) -and -not (Test-Path -LiteralPath $a
 
 if (-not (Test-Path -LiteralPath $accountAuth)) {
     Write-Host ""
-    Write-Host "No Codex login is stored yet for account '$AccountName'."
+    Write-Host "No Codex login is stored yet for account '$displayAccountName'."
     Write-Host "The API key will be used only to create a separate auth cache in:"
     Write-Host "  $accountHome"
     Write-Host ""
@@ -59,7 +134,7 @@ if (-not (Test-Path -LiteralPath $accountAuth)) {
         $env:CODEX_HOME = $accountHome
         $plainApiKey | codex login --with-api-key
         if ($LASTEXITCODE -ne 0) {
-            throw "Codex login failed for account '$AccountName'."
+            throw "Codex login failed for account '$displayAccountName'."
         }
     } finally {
         $plainApiKey = $null
