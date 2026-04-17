@@ -24,11 +24,31 @@ function Get-PlainTextFromSecureString {
 }
 
 function Get-CodexExecutable {
+    $launcherRoot = $null
+    if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
+        $launcherRoot = [IO.Path]::GetFullPath($PSScriptRoot)
+    }
+
+    $resolvedCommands = @(Get-Command codex -All -ErrorAction SilentlyContinue)
+    foreach ($resolvedCommand in $resolvedCommands) {
+        $resolvedPath = $resolvedCommand.Source
+        if ([string]::IsNullOrWhiteSpace($resolvedPath)) {
+            continue
+        }
+
+        $resolvedPath = [IO.Path]::GetFullPath($resolvedPath)
+        if ($null -ne $launcherRoot -and $resolvedPath.StartsWith($launcherRoot, [StringComparison]::OrdinalIgnoreCase)) {
+            continue
+        }
+
+        return $resolvedPath
+    }
+
     $candidateCommands = @("codex-real", "codex")
     foreach ($candidateCommand in $candidateCommands) {
         $resolvedCommand = Get-Command $candidateCommand -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($null -ne $resolvedCommand) {
-            return $resolvedCommand.Source
+        if ($null -ne $resolvedCommand -and -not [string]::IsNullOrWhiteSpace($resolvedCommand.Source)) {
+            return [IO.Path]::GetFullPath($resolvedCommand.Source)
         }
     }
 

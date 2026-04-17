@@ -34,15 +34,25 @@ After that, launching with the same account name reuses that account-specific au
 ## Files
 
 - `Start-Codex-ProjectAccount.ps1`: main launcher
-- `Install-CodexLauncher.ps1`: installs the launcher as the global `codex` command on this machine
+- `Install-CodexLauncher.ps1`: installs a persistent launcher as the global `codex` command on this machine
 
 ## Usage
 
-Install the global wrapper once:
+Install the persistent global wrapper once:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\Install-CodexLauncher.ps1
 ```
+
+The installer copies the launcher into a stable user-owned directory:
+
+- `C:\Users\USER\.codex-launcher`
+
+and adds this bin directory to the user `PATH`:
+
+- `C:\Users\USER\.codex-launcher\bin`
+
+This avoids editing the npm-managed shims in `C:\Users\USER\AppData\Roaming\npm`, so future Codex upgrades do not remove the account selector.
 
 After that, run from `cmd` or PowerShell:
 
@@ -68,6 +78,6 @@ Any extra arguments are forwarded to `codex`.
 
 - This project implements machine-local account separation for Codex CLI.
 - It supports either ChatGPT sign-in (`--device-auth`) or API-key login per account profile, depending on what your Codex CLI version supports.
-- The active machine copy was originally found at `C:\Users\USER\Start-Codex-ProjectAccount.ps1`.
-- A future improvement is to add an explicit interactive menu for selecting from known account profiles.
+- The launcher resolves the real Codex executable from `PATH` while ignoring its own installed wrapper directory.
+- The installed launcher copy lives outside the npm shim directory, so `npm install -g @openai/codex` updates do not overwrite it.
 - A regression test suite should be added for this project as part of the shared project rules.
