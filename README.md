@@ -34,7 +34,9 @@ After that, launching with the same account name reuses that account-specific au
 ## Files
 
 - `Start-Codex-ProjectAccount.ps1`: main launcher
+- `Start-Codex-ProjectAccount.cmd`: native cmd launcher used by the Windows `codex.cmd` shim
 - `Install-CodexLauncher.ps1`: installs a persistent launcher as the global `codex` command on this machine
+- `Invoke-RegressionTests.ps1`: runs the Pester regression suite in `tests\`
 
 ## Usage
 
@@ -74,10 +76,19 @@ powershell -ExecutionPolicy Bypass -File .\Start-Codex-ProjectAccount.ps1 -Accou
 
 Any extra arguments are forwarded to `codex`.
 
+## Regression tests
+
+Run the PowerShell regression suite with:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Invoke-RegressionTests.ps1
+```
+
+The suite covers the account-selection logic, login-mode selection, executable resolution, and installer PATH/wrapper behavior.
+
 ## Notes
 
 - This project implements machine-local account separation for Codex CLI.
 - It supports either ChatGPT sign-in (`--device-auth`) or API-key login per account profile, depending on what your Codex CLI version supports.
 - The launcher resolves the real Codex executable from `PATH` while ignoring its own installed wrapper directory.
 - The installed launcher copy lives outside the npm shim directory, so `npm install -g @openai/codex` updates do not overwrite it.
-- A regression test suite should be added for this project as part of the shared project rules.

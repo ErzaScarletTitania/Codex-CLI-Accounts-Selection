@@ -5,9 +5,13 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$sourceLauncherPath = Join-Path $PSScriptRoot "Start-Codex-ProjectAccount.ps1"
-if (-not (Test-Path -LiteralPath $sourceLauncherPath)) {
-    throw "Launcher not found at $sourceLauncherPath"
+$sourceLauncherPs1Path = Join-Path $PSScriptRoot "Start-Codex-ProjectAccount.ps1"
+$sourceLauncherCmdPath = Join-Path $PSScriptRoot "Start-Codex-ProjectAccount.cmd"
+if (-not (Test-Path -LiteralPath $sourceLauncherPs1Path)) {
+    throw "Launcher not found at $sourceLauncherPs1Path"
+}
+if (-not (Test-Path -LiteralPath $sourceLauncherCmdPath)) {
+    throw "Launcher not found at $sourceLauncherCmdPath"
 }
 
 function Add-UserPathEntry {
@@ -16,73 +20,106 @@ function Add-UserPathEntry {
         [string]$PathEntry
     )
 
+    $pathUpdate = Get-UserPathUpdate -CurrentPath ([Environment]::GetEnvironmentVariable("Path", "User")) -PathEntry $PathEntry
+    if (-not $pathUpdate.WasAdded) {
+        return $false
+    }
+
+    [Environment]::SetEnvironmentVariable("Path", $pathUpdate.UpdatedPath, "User")
+    return $true
+}
+
+function Get-UserPathUpdate {
+    param(
+        [AllowEmptyString()]
+        [string]$CurrentPath,
+        [Parameter(Mandatory = $true)]
+        [string]$PathEntry
+    )
+
     $normalizedPathEntry = [IO.Path]::GetFullPath($PathEntry).TrimEnd('\')
     $existingEntries = @(
-        [Environment]::GetEnvironmentVariable("Path", "User") -split ';' |
+        $CurrentPath -split ';' |
         Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
     )
 
     foreach ($existingEntry in $existingEntries) {
         $normalizedExistingEntry = [IO.Path]::GetFullPath($existingEntry).TrimEnd('\')
         if ($normalizedExistingEntry.Equals($normalizedPathEntry, [StringComparison]::OrdinalIgnoreCase)) {
-            return $false
+            return [pscustomobject]@{
+                WasAdded = $false
+                UpdatedPath = ($existingEntries -join ';').Trim(';')
+            }
         }
     }
 
     $updatedEntries = @($normalizedPathEntry) + $existingEntries
-    $updatedPath = ($updatedEntries -join ';').Trim(';')
-    [Environment]::SetEnvironmentVariable("Path", $updatedPath, "User")
-    return $true
+    return [pscustomobject]@{
+        WasAdded = $true
+        UpdatedPath = ($updatedEntries -join ';').Trim(';')
+    }
 }
 
-$resolvedInstallRoot = [IO.Path]::GetFullPath($InstallRoot)
-$binDir = Join-Path $resolvedInstallRoot "bin"
-$installedLauncherPath = Join-Path $resolvedInstallRoot "Start-Codex-ProjectAccount.ps1"
+function Invoke-InstallCodexLauncher {
+    param(
+        [string]$InstallRoot = "$HOME\.codex-launcher"
+    )
 
-New-Item -ItemType Directory -Force -Path $resolvedInstallRoot | Out-Null
-New-Item -ItemType Directory -Force -Path $binDir | Out-Null
+    $resolvedInstallRoot = [IO.Path]::GetFullPath($InstallRoot)
+    $binDir = Join-Path $resolvedInstallRoot "bin"
+    $installedLauncherPs1Path = Join-Path $resolvedInstallRoot "Start-Codex-ProjectAccount.ps1"
+    $installedLauncherCmdPath = Join-Path $resolvedInstallRoot "Start-Codex-ProjectAccount.cmd"
 
-Copy-Item -LiteralPath $sourceLauncherPath -Destination $installedLauncherPath -Force
+    New-Item -ItemType Directory -Force -Path $resolvedInstallRoot | Out-Null
+    New-Item -ItemType Directory -Force -Path $binDir | Out-Null
 
-$codexCmdPath = Join-Path $binDir "codex.cmd"
-$codexPs1Path = Join-Path $binDir "codex.ps1"
-$codexShPath = Join-Path $binDir "codex"
+    Copy-Item -LiteralPath $sourceLauncherPs1Path -Destination $installedLauncherPs1Path -Force
+    Copy-Item -LiteralPath $sourceLauncherCmdPath -Destination $installedLauncherCmdPath -Force
 
-$cmdWrapper = @"
+    $codexCmdPath = Join-Path $binDir "codex.cmd"
+    $codexPs1Path = Join-Path $binDir "codex.ps1"
+    $codexShPath = Join-Path $binDir "codex"
+
+    $cmdWrapper = @"
 @ECHO off
 SETLOCAL
-PowerShell -ExecutionPolicy Bypass -File "$installedLauncherPath" %*
+CALL "$installedLauncherCmdPath" %*
 EXIT /b %ERRORLEVEL%
 "@
 
-$ps1Wrapper = @"
+    $ps1Wrapper = @"
 #!/usr/bin/env pwsh
-& "$installedLauncherPath" @args
+& "$installedLauncherPs1Path" @args
 exit `$LASTEXITCODE
 "@
 
-$shWrapper = @"
+    $shWrapper = @"
 #!/bin/sh
-exec powershell.exe -ExecutionPolicy Bypass -File "$installedLauncherPath" "\$@"
+exec powershell.exe -ExecutionPolicy Bypass -File "$installedLauncherPs1Path" "\$@"
 "@
 
-Set-Content -LiteralPath $codexCmdPath -Value $cmdWrapper -NoNewline
-Set-Content -LiteralPath $codexPs1Path -Value $ps1Wrapper -NoNewline
-Set-Content -LiteralPath $codexShPath -Value $shWrapper -NoNewline
+    Set-Content -LiteralPath $codexCmdPath -Value $cmdWrapper -NoNewline
+    Set-Content -LiteralPath $codexPs1Path -Value $ps1Wrapper -NoNewline
+    Set-Content -LiteralPath $codexShPath -Value $shWrapper -NoNewline
 
-$pathUpdated = Add-UserPathEntry -PathEntry $binDir
+    $pathUpdated = Add-UserPathEntry -PathEntry $binDir
 
-Write-Host "Installed persistent Codex launchers:"
-Write-Host "  Launcher root: $resolvedInstallRoot"
-Write-Host "  $codexCmdPath"
-Write-Host "  $codexPs1Path"
-Write-Host "  $codexShPath"
-Write-Host ""
-if ($pathUpdated) {
-    Write-Host "Added '$binDir' to the user PATH."
-    Write-Host "Open a new terminal before running 'codex' so the new PATH entry is loaded."
-} else {
-    Write-Host "'$binDir' is already present in the user PATH."
+    Write-Host "Installed persistent Codex launchers:"
+    Write-Host "  Launcher root: $resolvedInstallRoot"
+    Write-Host "  $codexCmdPath"
+    Write-Host "  $codexPs1Path"
+    Write-Host "  $codexShPath"
+    Write-Host ""
+    if ($pathUpdated) {
+        Write-Host "Added '$binDir' to the user PATH."
+        Write-Host "Open a new terminal before running 'codex' so the new PATH entry is loaded."
+    } else {
+        Write-Host "'$binDir' is already present in the user PATH."
+    }
+    Write-Host ""
+    Write-Host "Typing 'codex' now opens the interactive account selector without modifying npm-managed Codex files."
 }
-Write-Host ""
-Write-Host "Typing 'codex' now opens the interactive account selector without modifying npm-managed Codex files."
+
+if ($MyInvocation.InvocationName -ne ".") {
+    Invoke-InstallCodexLauncher -InstallRoot $InstallRoot
+}

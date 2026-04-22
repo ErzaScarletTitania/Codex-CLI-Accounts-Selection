@@ -1,3 +1,4 @@
+[CmdletBinding(PositionalBinding = $false)]
 param(
     [string]$AccountName,
     [string]$ProjectPath = (Get-Location).Path,
@@ -29,6 +30,15 @@ function Get-CodexExecutable {
         $launcherRoot = [IO.Path]::GetFullPath($PSScriptRoot)
     }
 
+    $resolvedRealCommand = Get-Command codex-real.cmd -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($null -eq $resolvedRealCommand -or [string]::IsNullOrWhiteSpace($resolvedRealCommand.Source)) {
+        $resolvedRealCommand = Get-Command codex-real -ErrorAction SilentlyContinue | Select-Object -First 1
+    }
+
+    if ($null -ne $resolvedRealCommand -and -not [string]::IsNullOrWhiteSpace($resolvedRealCommand.Source)) {
+        return [IO.Path]::GetFullPath($resolvedRealCommand.Source)
+    }
+
     $resolvedCommands = @(Get-Command codex -All -ErrorAction SilentlyContinue)
     foreach ($resolvedCommand in $resolvedCommands) {
         $resolvedPath = $resolvedCommand.Source
@@ -41,15 +51,15 @@ function Get-CodexExecutable {
             continue
         }
 
-        return $resolvedPath
-    }
-
-    $candidateCommands = @("codex-real", "codex")
-    foreach ($candidateCommand in $candidateCommands) {
-        $resolvedCommand = Get-Command $candidateCommand -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($null -ne $resolvedCommand -and -not [string]::IsNullOrWhiteSpace($resolvedCommand.Source)) {
-            return [IO.Path]::GetFullPath($resolvedCommand.Source)
+        if ([IO.Path]::GetFileNameWithoutExtension($resolvedPath).Equals("codex-real", [StringComparison]::OrdinalIgnoreCase)) {
+            return $resolvedPath
         }
+
+        if ([IO.Path]::GetFileNameWithoutExtension($resolvedPath).Equals("codex", [StringComparison]::OrdinalIgnoreCase)) {
+            continue
+        }
+
+        return $resolvedPath
     }
 
     throw "Could not find a Codex executable. Install Codex CLI first."
@@ -179,82 +189,103 @@ function Resolve-AccountProfile {
     }
 }
 
-$resolvedProjectPath = (Resolve-Path -LiteralPath $ProjectPath).Path
-$selectedAccount = Resolve-AccountProfile -RequestedAccountName $AccountName -Profiles $accountProfiles
-$displayAccountName = $selectedAccount.Label
-$safeAccountName = $selectedAccount.Slug
-$codexExecutable = Get-CodexExecutable
-$supportsDeviceAuth = Test-CodexSupportsDeviceAuth -CodexExecutable $codexExecutable
+function Invoke-StartCodexProjectAccount {
+    param(
+        [string]$AccountName,
+        [string]$ProjectPath,
+        [string]$CodexHomeRoot,
+        [string[]]$CliArgs = @()
+    )
 
-$accountHome = $selectedAccount.HomePath
-if ([string]::IsNullOrWhiteSpace($accountHome)) {
-    $accountHome = Join-Path $CodexHomeRoot $safeAccountName
-}
-$primaryCodexHome = Join-Path $HOME ".codex"
-$primaryConfig = Join-Path $primaryCodexHome "config.toml"
-$accountConfig = Join-Path $accountHome "config.toml"
-$accountAuth = Join-Path $accountHome "auth.json"
+    $resolvedProjectPath = (Resolve-Path -LiteralPath $ProjectPath).Path
+    $selectedAccount = Resolve-AccountProfile -RequestedAccountName $AccountName -Profiles $accountProfiles
+    $displayAccountName = $selectedAccount.Label
+    $safeAccountName = $selectedAccount.Slug
+    $codexExecutable = Get-CodexExecutable
+    $supportsDeviceAuth = Test-CodexSupportsDeviceAuth -CodexExecutable $codexExecutable
+    $isLoginCommand = $CliArgs.Count -gt 0 -and $CliArgs[0] -eq "login"
 
-New-Item -ItemType Directory -Force -Path $accountHome | Out-Null
+    $accountHome = $selectedAccount.HomePath
+    if ([string]::IsNullOrWhiteSpace($accountHome)) {
+        $accountHome = Join-Path $CodexHomeRoot $safeAccountName
+    }
+    $primaryCodexHome = Join-Path $HOME ".codex"
+    $primaryConfig = Join-Path $primaryCodexHome "config.toml"
+    $accountConfig = Join-Path $accountHome "config.toml"
+    $accountAuth = Join-Path $accountHome "auth.json"
+    $authWasMissing = -not (Test-Path -LiteralPath $accountAuth)
 
-if ((Test-Path -LiteralPath $primaryConfig) -and -not (Test-Path -LiteralPath $accountConfig)) {
-    Copy-Item -LiteralPath $primaryConfig -Destination $accountConfig
-}
+    New-Item -ItemType Directory -Force -Path $accountHome | Out-Null
 
-if (-not (Test-Path -LiteralPath $accountAuth)) {
-    Write-Host ""
-    Write-Host "No Codex login is stored yet for account '$displayAccountName'."
-    Write-Host "A separate auth cache will be created in:"
-    Write-Host "  $accountHome"
-    Write-Host ""
+    if ((Test-Path -LiteralPath $primaryConfig) -and -not (Test-Path -LiteralPath $accountConfig)) {
+        Copy-Item -LiteralPath $primaryConfig -Destination $accountConfig
+    }
 
-    $loginMethod = Select-LoginMethod -SupportsDeviceAuth $supportsDeviceAuth
+    if ($authWasMissing) {
+        Write-Host ""
+        Write-Host "No Codex login is stored yet for account '$displayAccountName'."
+        Write-Host "A separate auth cache will be created in:"
+        Write-Host "  $accountHome"
+        Write-Host ""
 
-    $previousCodexHome = $env:CODEX_HOME
-    $plainApiKey = $null
-    try {
-        $env:CODEX_HOME = $accountHome
-        if ($loginMethod -eq "device-auth") {
-            & $codexExecutable login --device-auth
-        } else {
-            $secureApiKey = Read-Host "Paste the OpenAI API key for this account" -AsSecureString
-            $plainApiKey = Get-PlainTextFromSecureString -SecureString $secureApiKey
-            if ([string]::IsNullOrWhiteSpace($plainApiKey)) {
-                throw "No API key was provided."
+        $loginMethod = Select-LoginMethod -SupportsDeviceAuth $supportsDeviceAuth
+
+        $previousCodexHome = $env:CODEX_HOME
+        $plainApiKey = $null
+        try {
+            $env:CODEX_HOME = $accountHome
+            if ($loginMethod -eq "device-auth") {
+                & $codexExecutable login --device-auth
+            } else {
+                $secureApiKey = Read-Host "Paste the OpenAI API key for this account" -AsSecureString
+                $plainApiKey = Get-PlainTextFromSecureString -SecureString $secureApiKey
+                if ([string]::IsNullOrWhiteSpace($plainApiKey)) {
+                    throw "No API key was provided."
+                }
+
+                $plainApiKey | & $codexExecutable login --with-api-key
             }
 
-            $plainApiKey | & $codexExecutable login --with-api-key
+            if ($LASTEXITCODE -ne 0) {
+                throw "Codex login failed for account '$displayAccountName'."
+            }
+        } finally {
+            $plainApiKey = $null
+            if ($null -eq $previousCodexHome) {
+                Remove-Item Env:CODEX_HOME -ErrorAction SilentlyContinue
+            } else {
+                $env:CODEX_HOME = $previousCodexHome
+            }
         }
+    }
 
-        if ($LASTEXITCODE -ne 0) {
-            throw "Codex login failed for account '$displayAccountName'."
+    if ($isLoginCommand -and $authWasMissing) {
+        return 0
+    }
+
+    $previousCodexHome = $env:CODEX_HOME
+    $exitCode = 0
+    try {
+        $env:CODEX_HOME = $accountHome
+        Push-Location -LiteralPath $resolvedProjectPath
+        & $codexExecutable @CliArgs
+        if ($null -ne $LASTEXITCODE) {
+            $exitCode = $LASTEXITCODE
         }
     } finally {
-        $plainApiKey = $null
+        Pop-Location
         if ($null -eq $previousCodexHome) {
             Remove-Item Env:CODEX_HOME -ErrorAction SilentlyContinue
         } else {
             $env:CODEX_HOME = $previousCodexHome
         }
     }
+
+    return $exitCode
 }
 
-$previousCodexHome = $env:CODEX_HOME
-$exitCode = 0
-try {
-    $env:CODEX_HOME = $accountHome
-    Push-Location -LiteralPath $resolvedProjectPath
-    & $codexExecutable @args
-    if ($null -ne $LASTEXITCODE) {
-        $exitCode = $LASTEXITCODE
-    }
-} finally {
-    Pop-Location
-    if ($null -eq $previousCodexHome) {
-        Remove-Item Env:CODEX_HOME -ErrorAction SilentlyContinue
-    } else {
-        $env:CODEX_HOME = $previousCodexHome
-    }
+if ($MyInvocation.InvocationName -ne ".") {
+    $forwardedCliArgs = @($MyInvocation.UnboundArguments)
+    $scriptExitCode = Invoke-StartCodexProjectAccount -AccountName $AccountName -ProjectPath $ProjectPath -CodexHomeRoot $CodexHomeRoot -CliArgs $forwardedCliArgs
+    exit $scriptExitCode
 }
-
-exit $exitCode
