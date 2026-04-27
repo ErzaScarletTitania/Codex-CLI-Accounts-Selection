@@ -65,6 +65,22 @@ Describe "Get-CodexExecutable" {
 
         Get-CodexExecutable | Should -Be $expectedExecutable
     }
+
+    It "falls back to the first non-launcher codex command" {
+        $script:expectedExecutable = [IO.Path]::GetFullPath("C:\Users\tester\AppData\Roaming\npm\codex.cmd")
+        $script:launcherExecutable = Join-Path $PSScriptRoot "..\codex.cmd"
+
+        Mock Get-Command { $null } -ParameterFilter { $Name -eq "codex-real.cmd" }
+        Mock Get-Command { $null } -ParameterFilter { $Name -eq "codex-real" }
+        Mock Get-Command {
+            @(
+                [pscustomobject]@{ Source = $script:launcherExecutable }
+                [pscustomobject]@{ Source = $script:expectedExecutable }
+            )
+        } -ParameterFilter { $Name -eq "codex" -and $All }
+
+        Get-CodexExecutable | Should -Be $script:expectedExecutable
+    }
 }
 
 Describe "Test-CodexSupportsDeviceAuth" {

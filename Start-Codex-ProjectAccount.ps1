@@ -2,11 +2,48 @@
 param(
     [string]$AccountName,
     [string]$ProjectPath = (Get-Location).Path,
-    [string]$CodexHomeRoot = "$HOME\\.codex-accounts"
+    [string]$CodexHomeRoot = "$HOME\\.codex-accounts",
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$CliArgs
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+function Get-PSNativeCommandErrorPreferenceState {
+    if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {
+        return [pscustomobject]@{
+            Exists = $true
+            Value = $PSNativeCommandUseErrorActionPreference
+        }
+    }
+
+    return [pscustomobject]@{
+        Exists = $false
+        Value = $null
+    }
+}
+
+function Set-PSNativeCommandErrorPreference {
+    param(
+        [bool]$Enabled
+    )
+
+    Set-Variable -Name PSNativeCommandUseErrorActionPreference -Value $Enabled -Scope Script
+}
+
+function Restore-PSNativeCommandErrorPreferenceState {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$State
+    )
+
+    if ($State.Exists) {
+        Set-Variable -Name PSNativeCommandUseErrorActionPreference -Value $State.Value -Scope Script
+    } else {
+        Remove-Variable -Name PSNativeCommandUseErrorActionPreference -Scope Script -ErrorAction SilentlyContinue
+    }
+}
 
 function Get-PlainTextFromSecureString {
     param(
@@ -22,6 +59,122 @@ function Get-PlainTextFromSecureString {
             [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
         }
     }
+}
+
+function Invoke-CodexCommand {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$CodexExecutable,
+        [string[]]$Arguments = @(),
+        [switch]$RedirectStderr
+    )
+
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+
+        $extension = [IO.Path]::GetExtension($CodexExecutable)
+        if ($extension.Equals(".cmd", [StringComparison]::OrdinalIgnoreCase) -or
+            $extension.Equals(".bat", [StringComparison]::OrdinalIgnoreCase)) {
+            if ($RedirectStderr) {
+                $quotedExecutable = '"' + $CodexExecutable.Replace('"', '""') + '"'
+                $quotedArguments = @(
+                    foreach ($argument in $Arguments) {
+                        '"' + $argument.Replace('"', '""') + '"'
+                    }
+                )
+                $commandLine = (($quotedExecutable) + ' ' + ($quotedArguments -join ' ') + ' 2>&1').Trim()
+                return & cmd.exe /d /c $commandLine
+            }
+
+            return & $CodexExecutable @Arguments
+        }
+
+        if ($RedirectStderr) {
+            return & $CodexExecutable @Arguments 2>&1
+        }
+
+        return & $CodexExecutable @Arguments
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+}
+
+function Invoke-CodexCommandWithStdin {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$CodexExecutable,
+        [Parameter(Mandatory = $true)]
+        [string]$StandardInput,
+        [string[]]$Arguments = @()
+    )
+
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+
+        $extension = [IO.Path]::GetExtension($CodexExecutable)
+        if ($extension.Equals(".cmd", [StringComparison]::OrdinalIgnoreCase) -or
+            $extension.Equals(".bat", [StringComparison]::OrdinalIgnoreCase)) {
+            $quotedExecutable = '"' + $CodexExecutable.Replace('"', '""') + '"'
+            $quotedArguments = @(
+                foreach ($argument in $Arguments) {
+                    '"' + $argument.Replace('"', '""') + '"'
+                }
+            )
+            $commandLine = (($quotedExecutable) + ' ' + ($quotedArguments -join ' ')).Trim()
+            return $StandardInput | & cmd.exe /d /c $commandLine
+        }
+
+        return $StandardInput | & $CodexExecutable @Arguments
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+}
+
+function ConvertTo-CmdQuotedArgument {
+    param(
+        [AllowEmptyString()]
+        [string]$Value
+    )
+
+    if ($null -eq $Value) {
+        return '""'
+    }
+
+    return '"' + $Value.Replace('"', '""') + '"'
+}
+
+function Invoke-CodexCommandInCmdSession {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$CodexExecutable,
+        [Parameter(Mandatory = $true)]
+        [string]$CodexHome,
+        [Parameter(Mandatory = $true)]
+        [string]$WorkingDirectory,
+        [string[]]$Arguments = @()
+    )
+
+    $quotedExecutable = ConvertTo-CmdQuotedArgument -Value $CodexExecutable
+    $quotedWorkingDirectory = ConvertTo-CmdQuotedArgument -Value $WorkingDirectory
+    $quotedCodexHome = ConvertTo-CmdQuotedArgument -Value $CodexHome
+    $quotedArguments = @(
+        foreach ($argument in $Arguments) {
+            ConvertTo-CmdQuotedArgument -Value $argument
+        }
+    )
+
+    $commandSegments = @(
+        'setlocal'
+        ('cd /d ' + $quotedWorkingDirectory)
+        ('set "CODEX_HOME=' + $CodexHome.Replace('"', '""') + '"')
+        (($quotedExecutable + ' ' + ($quotedArguments -join ' ')).Trim())
+    )
+
+    $commandLine = $commandSegments -join ' && '
+    & cmd.exe /d /c $commandLine
+    return $LASTEXITCODE
 }
 
 function Get-CodexExecutable {
@@ -40,6 +193,7 @@ function Get-CodexExecutable {
     }
 
     $resolvedCommands = @(Get-Command codex -All -ErrorAction SilentlyContinue)
+    $candidatePaths = @()
     foreach ($resolvedCommand in $resolvedCommands) {
         $resolvedPath = $resolvedCommand.Source
         if ([string]::IsNullOrWhiteSpace($resolvedPath)) {
@@ -51,15 +205,23 @@ function Get-CodexExecutable {
             continue
         }
 
-        if ([IO.Path]::GetFileNameWithoutExtension($resolvedPath).Equals("codex-real", [StringComparison]::OrdinalIgnoreCase)) {
-            return $resolvedPath
-        }
+        $candidatePaths += $resolvedPath
+    }
 
-        if ([IO.Path]::GetFileNameWithoutExtension($resolvedPath).Equals("codex", [StringComparison]::OrdinalIgnoreCase)) {
-            continue
-        }
+    $preferredCandidate = $candidatePaths |
+        Sort-Object {
+            switch ([IO.Path]::GetExtension($_).ToLowerInvariant()) {
+                ".cmd" { 0; break }
+                ".exe" { 1; break }
+                ".bat" { 2; break }
+                ".ps1" { 3; break }
+                default { 4; break }
+            }
+        } |
+        Select-Object -First 1
 
-        return $resolvedPath
+    if (-not [string]::IsNullOrWhiteSpace($preferredCandidate)) {
+        return $preferredCandidate
     }
 
     throw "Could not find a Codex executable. Install Codex CLI first."
@@ -71,7 +233,13 @@ function Test-CodexSupportsDeviceAuth {
         [string]$CodexExecutable
     )
 
-    $helpOutput = & $CodexExecutable login --help 2>&1
+    $previousNativeErrorPreference = Get-PSNativeCommandErrorPreferenceState
+    try {
+        Set-PSNativeCommandErrorPreference -Enabled $false
+        $helpOutput = Invoke-CodexCommand -CodexExecutable $CodexExecutable -Arguments @("login", "--help") -RedirectStderr
+    } finally {
+        Restore-PSNativeCommandErrorPreferenceState -State $previousNativeErrorPreference
+    }
     if ($LASTEXITCODE -ne 0) {
         return $false
     }
@@ -198,12 +366,13 @@ function Invoke-StartCodexProjectAccount {
     )
 
     $resolvedProjectPath = (Resolve-Path -LiteralPath $ProjectPath).Path
+    $normalizedCliArgs = @($CliArgs)
     $selectedAccount = Resolve-AccountProfile -RequestedAccountName $AccountName -Profiles $accountProfiles
     $displayAccountName = $selectedAccount.Label
     $safeAccountName = $selectedAccount.Slug
     $codexExecutable = Get-CodexExecutable
     $supportsDeviceAuth = Test-CodexSupportsDeviceAuth -CodexExecutable $codexExecutable
-    $isLoginCommand = $CliArgs.Count -gt 0 -and $CliArgs[0] -eq "login"
+    $isLoginCommand = $normalizedCliArgs.Count -gt 0 -and $normalizedCliArgs[0] -eq "login"
 
     $accountHome = $selectedAccount.HomePath
     if ([string]::IsNullOrWhiteSpace($accountHome)) {
@@ -232,10 +401,13 @@ function Invoke-StartCodexProjectAccount {
 
         $previousCodexHome = $env:CODEX_HOME
         $plainApiKey = $null
+        $previousNativeErrorPreference = Get-PSNativeCommandErrorPreferenceState
         try {
             $env:CODEX_HOME = $accountHome
+            Set-PSNativeCommandErrorPreference -Enabled $false
             if ($loginMethod -eq "device-auth") {
-                & $codexExecutable login --device-auth
+                $loginExitCode = Invoke-CodexCommandInCmdSession -CodexExecutable $codexExecutable -CodexHome $accountHome -WorkingDirectory $resolvedProjectPath -Arguments @("login", "--device-auth")
+                $global:LASTEXITCODE = $loginExitCode
             } else {
                 $secureApiKey = Read-Host "Paste the OpenAI API key for this account" -AsSecureString
                 $plainApiKey = Get-PlainTextFromSecureString -SecureString $secureApiKey
@@ -243,7 +415,7 @@ function Invoke-StartCodexProjectAccount {
                     throw "No API key was provided."
                 }
 
-                $plainApiKey | & $codexExecutable login --with-api-key
+                Invoke-CodexCommandWithStdin -CodexExecutable $codexExecutable -StandardInput $plainApiKey -Arguments @("login", "--with-api-key")
             }
 
             if ($LASTEXITCODE -ne 0) {
@@ -251,6 +423,7 @@ function Invoke-StartCodexProjectAccount {
             }
         } finally {
             $plainApiKey = $null
+            Restore-PSNativeCommandErrorPreferenceState -State $previousNativeErrorPreference
             if ($null -eq $previousCodexHome) {
                 Remove-Item Env:CODEX_HOME -ErrorAction SilentlyContinue
             } else {
@@ -264,15 +437,16 @@ function Invoke-StartCodexProjectAccount {
     }
 
     $previousCodexHome = $env:CODEX_HOME
+    $previousNativeErrorPreference = Get-PSNativeCommandErrorPreferenceState
     $exitCode = 0
     try {
         $env:CODEX_HOME = $accountHome
+        Set-PSNativeCommandErrorPreference -Enabled $false
         Push-Location -LiteralPath $resolvedProjectPath
-        & $codexExecutable @CliArgs
-        if ($null -ne $LASTEXITCODE) {
-            $exitCode = $LASTEXITCODE
-        }
+        $exitCode = Invoke-CodexCommandInCmdSession -CodexExecutable $codexExecutable -CodexHome $accountHome -WorkingDirectory $resolvedProjectPath -Arguments $normalizedCliArgs
+        $global:LASTEXITCODE = $exitCode
     } finally {
+        Restore-PSNativeCommandErrorPreferenceState -State $previousNativeErrorPreference
         Pop-Location
         if ($null -eq $previousCodexHome) {
             Remove-Item Env:CODEX_HOME -ErrorAction SilentlyContinue
@@ -285,7 +459,6 @@ function Invoke-StartCodexProjectAccount {
 }
 
 if ($MyInvocation.InvocationName -ne ".") {
-    $forwardedCliArgs = @($MyInvocation.UnboundArguments)
-    $scriptExitCode = Invoke-StartCodexProjectAccount -AccountName $AccountName -ProjectPath $ProjectPath -CodexHomeRoot $CodexHomeRoot -CliArgs $forwardedCliArgs
+    $scriptExitCode = Invoke-StartCodexProjectAccount -AccountName $AccountName -ProjectPath $ProjectPath -CodexHomeRoot $CodexHomeRoot -CliArgs @($CliArgs)
     exit $scriptExitCode
 }

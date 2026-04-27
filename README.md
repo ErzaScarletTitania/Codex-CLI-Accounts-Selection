@@ -1,6 +1,6 @@
 ﻿# Codex-CLI-Accounts-Selection
 
-Windows PowerShell launcher for running Codex with separate local account profiles.
+Windows launcher for running Codex with separate local account profiles.
 
 ## What it does
 
@@ -33,8 +33,8 @@ After that, launching with the same account name reuses that account-specific au
 
 ## Files
 
-- `Start-Codex-ProjectAccount.ps1`: main launcher
-- `Start-Codex-ProjectAccount.cmd`: native cmd launcher used by the Windows `codex.cmd` shim
+- `Start-Codex-ProjectAccount.ps1`: PowerShell implementation used for tests and direct scripted invocation
+- `Start-Codex-ProjectAccount.cmd`: native Windows launcher used by the installed `codex.cmd` shim for interactive sessions
 - `Install-CodexLauncher.ps1`: installs a persistent launcher as the global `codex` command on this machine
 - `Invoke-RegressionTests.ps1`: runs the Pester regression suite in `tests\`
 
@@ -75,6 +75,34 @@ powershell -ExecutionPolicy Bypass -File .\Start-Codex-ProjectAccount.ps1 -Accou
 ```
 
 Any extra arguments are forwarded to `codex`.
+
+## Known Issues
+
+### Windows interactive launch must stay on the native `cmd` path
+
+On Windows, Codex interactive startup can fail if the final interactive launch is routed through PowerShell instead of the native `cmd` shim.
+
+Observed symptoms included:
+
+- `Error: stdout is not a terminal`
+- returning to `cmd.exe` immediately after account selection
+- login flows that completed in the browser but did not leave the user inside an active Codex session
+
+Root cause:
+
+- the Codex CLI Windows shim expects a real console/TTY during interactive startup
+- wrapping the final interactive launch inside PowerShell can interfere with terminal detection
+
+Current fix in this repo:
+
+- the installed Windows `codex.cmd` wrapper calls `Start-Codex-ProjectAccount.cmd`
+- `Start-Codex-ProjectAccount.cmd` performs account selection and launches the real npm-managed `codex.cmd` directly
+- the PowerShell launcher remains available for direct scripted usage and regression coverage
+
+If interactive startup breaks again after a Codex CLI upgrade, verify these two points first:
+
+- the installed wrapper still points to `Start-Codex-ProjectAccount.cmd`
+- the native launcher still calls `%APPDATA%\\npm\\codex.cmd` directly for the final interactive run
 
 ## Regression tests
 

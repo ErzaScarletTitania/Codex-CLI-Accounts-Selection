@@ -1,6 +1,13 @@
 @ECHO off
 SETLOCAL ENABLEEXTENSIONS
 
+SET "CODEX_REAL=%APPDATA%\npm\codex.cmd"
+IF NOT EXIST "%CODEX_REAL%" (
+    ECHO Could not find a Codex executable at "%CODEX_REAL%".
+    ECHO Install Codex CLI first.
+    EXIT /B 1
+)
+
 SET "USER_REQUESTED_LOGIN="
 IF /I "%~1"=="login" SET "USER_REQUESTED_LOGIN=1"
 
@@ -44,13 +51,13 @@ ECHO A separate auth cache will be created in:
 ECHO   %ACCOUNT_HOME%
 ECHO.
 ECHO Choose how to authenticate this account:
-ECHO   1. Sign in with ChatGPT ^(recommended for ChatGPT Business^)
+ECHO   1. Sign in with ChatGPT (recommended for ChatGPT Business)
 ECHO   2. Use an OpenAI API key
 ECHO.
-CHOICE /C 12 /N /M "Choose 1 or 2: "
+CHOICE /C 12 /N /M "Choose 1 or 2 (Enter for 1): "
 IF ERRORLEVEL 2 GOTO login_with_api_key
 
-CALL "C:\Users\lglez\AppData\Roaming\npm\codex-real.cmd" login --device-auth
+CALL "%CODEX_REAL%" login --device-auth
 IF ERRORLEVEL 1 GOTO exit_with_error
 GOTO login_complete
 
@@ -60,7 +67,7 @@ IF NOT DEFINED OPENAI_KEY (
     ECHO No API key was provided.
     EXIT /B 1
 )
-ECHO %OPENAI_KEY%| CALL "C:\Users\lglez\AppData\Roaming\npm\codex-real.cmd" login --with-api-key
+ECHO %OPENAI_KEY%| CALL "%CODEX_REAL%" login --with-api-key
 SET "OPENAI_KEY="
 IF ERRORLEVEL 1 GOTO exit_with_error
 
@@ -68,7 +75,7 @@ IF ERRORLEVEL 1 GOTO exit_with_error
 IF DEFINED USER_REQUESTED_LOGIN EXIT /B 0
 
 :run_codex
-CALL "C:\Users\lglez\AppData\Roaming\npm\codex-real.cmd" %*
+CALL "%CODEX_REAL%" %*
 SET "EXITCODE=%ERRORLEVEL%"
 ENDLOCAL & EXIT /B %EXITCODE%
 
