@@ -14,6 +14,24 @@ if (-not (Test-Path -LiteralPath $sourceLauncherCmdPath)) {
     throw "Launcher not found at $sourceLauncherCmdPath"
 }
 
+function Normalize-PathEntry {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Value
+    )
+
+    $trimmedValue = $Value.Trim().Trim('"')
+    if ([string]::IsNullOrWhiteSpace($trimmedValue)) {
+        return $null
+    }
+
+    try {
+        return [IO.Path]::GetFullPath($trimmedValue).TrimEnd('\')
+    } catch {
+        return $trimmedValue.TrimEnd('\')
+    }
+}
+
 function Add-UserPathEntry {
     param(
         [Parameter(Mandatory = $true)]
@@ -37,14 +55,21 @@ function Get-UserPathUpdate {
         [string]$PathEntry
     )
 
-    $normalizedPathEntry = [IO.Path]::GetFullPath($PathEntry).TrimEnd('\')
+    $normalizedPathEntry = Normalize-PathEntry -Value $PathEntry
+    if ([string]::IsNullOrWhiteSpace($normalizedPathEntry)) {
+        throw "PathEntry cannot be empty."
+    }
+
     $existingEntries = @(
         $CurrentPath -split ';' |
         Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
     )
 
     foreach ($existingEntry in $existingEntries) {
-        $normalizedExistingEntry = [IO.Path]::GetFullPath($existingEntry).TrimEnd('\')
+        $normalizedExistingEntry = Normalize-PathEntry -Value $existingEntry
+        if ([string]::IsNullOrWhiteSpace($normalizedExistingEntry)) {
+            continue
+        }
         if ($normalizedExistingEntry.Equals($normalizedPathEntry, [StringComparison]::OrdinalIgnoreCase)) {
             return [pscustomobject]@{
                 WasAdded = $false
@@ -58,6 +83,128 @@ function Get-UserPathUpdate {
         WasAdded = $true
         UpdatedPath = ($updatedEntries -join ';').Trim(';')
     }
+}
+
+function New-CodexCmdWrapperContent {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$InstalledLauncherPs1Path,
+        [Parameter(Mandatory = $true)]
+        [string]$InstalledLauncherCmdPath
+    )
+
+@"
+@ECHO off
+SETLOCAL
+SET "CODEX_HAS_ACCOUNT_ARG="
+FOR %%A IN (%*) DO (
+  IF /I "%%~A"=="-AccountName" SET "CODEX_HAS_ACCOUNT_ARG=1"
+)
+IF DEFINED CODEX_HAS_ACCOUNT_ARG (
+  powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "$InstalledLauncherPs1Path" %*
+) ELSE (
+  CALL "$InstalledLauncherCmdPath" %*
+)
+EXIT /b %ERRORLEVEL%
+"@
+}
+
+function New-CodexPs1WrapperContent {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$InstalledLauncherPs1Path
+    )
+
+@"
+#!/usr/bin/env pwsh
+`$launcherArgs = @args
+`$hasExplicitAccountArgument = `$false
+foreach (`$argument in `$launcherArgs) {
+    if (`$argument -eq '-AccountName') {
+        `$hasExplicitAccountArgument = `$true
+        break
+    }
+}
+
+if (-not `$hasExplicitAccountArgument) {
+    while (`$true) {
+        Write-Host ''
+        Write-Host 'Select the Codex account to use:'
+        Write-Host '  1. Aleph General'
+        Write-Host '  2. GTB'
+        Write-Host '  3. IE - Imagined Earth'
+        Write-Host ''
+        `$selection = (Read-Host 'Choose 1, 2, or 3').Trim()
+        if (`$selection -in @('1', '2', '3')) {
+            `$launcherArgs = @('-AccountName', `$selection) + `$launcherArgs
+            break
+        }
+
+        Write-Host 'Invalid selection. Enter 1, 2, or 3.' -ForegroundColor Yellow
+    }
+}
+
+& "$InstalledLauncherPs1Path" @launcherArgs
+exit `$LASTEXITCODE
+"@
+}
+
+function New-CodexShWrapperContent {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$InstalledLauncherPs1Path
+    )
+
+@"
+#!/bin/sh
+set -eu
+
+if command -v pwsh.exe >/dev/null 2>&1; then
+  powershell_exe='pwsh.exe'
+elif command -v powershell.exe >/dev/null 2>&1; then
+  powershell_exe='powershell.exe'
+else
+  echo "Could not find PowerShell. Install PowerShell or Windows PowerShell first." >&2
+  exit 1
+fi
+
+has_explicit_account_arg=0
+for arg in "`$@"; do
+  case "`$arg" in
+    -AccountName)
+      has_explicit_account_arg=1
+      break
+      ;;
+  esac
+done
+
+if [ "`$has_explicit_account_arg" -eq 0 ]; then
+  while :; do
+    printf '\n'
+    printf 'Select the Codex account to use:\n'
+    printf '  1. Aleph General\n'
+    printf '  2. GTB\n'
+    printf '  3. IE - Imagined Earth\n\n'
+    printf 'Choose 1, 2, or 3: '
+    IFS= read -r selection || selection=''
+    case "`$selection" in
+      1|2|3)
+        set -- -AccountName "`$selection" "`$@"
+        break
+        ;;
+      *)
+        printf 'Invalid selection. Enter 1, 2, or 3.\n\n' >&2
+        ;;
+    esac
+  done
+fi
+
+if [ -t 0 ] && command -v winpty >/dev/null 2>&1; then
+  exec winpty "`$powershell_exe" -NoLogo -NoProfile -ExecutionPolicy Bypass -File "$InstalledLauncherPs1Path" "`$@"
+fi
+
+exec "`$powershell_exe" -NoLogo -NoProfile -ExecutionPolicy Bypass -File "$InstalledLauncherPs1Path" "`$@"
+"@
 }
 
 function Invoke-InstallCodexLauncher {
@@ -80,27 +227,9 @@ function Invoke-InstallCodexLauncher {
     $codexPs1Path = Join-Path $binDir "codex.ps1"
     $codexShPath = Join-Path $binDir "codex"
 
-    $cmdWrapper = @"
-@ECHO off
-SETLOCAL
-CALL "$installedLauncherCmdPath" %*
-EXIT /b %ERRORLEVEL%
-"@
-
-    $ps1Wrapper = @"
-#!/usr/bin/env pwsh
-& "$installedLauncherPs1Path" @args
-exit `$LASTEXITCODE
-"@
-
-    $shWrapper = @"
-#!/bin/sh
-exec powershell.exe -ExecutionPolicy Bypass -File "$installedLauncherPs1Path" "\$@"
-"@
-
-    Set-Content -LiteralPath $codexCmdPath -Value $cmdWrapper -NoNewline
-    Set-Content -LiteralPath $codexPs1Path -Value $ps1Wrapper -NoNewline
-    Set-Content -LiteralPath $codexShPath -Value $shWrapper -NoNewline
+    Set-Content -LiteralPath $codexCmdPath -Value (New-CodexCmdWrapperContent -InstalledLauncherPs1Path $installedLauncherPs1Path -InstalledLauncherCmdPath $installedLauncherCmdPath) -NoNewline
+    Set-Content -LiteralPath $codexPs1Path -Value (New-CodexPs1WrapperContent -InstalledLauncherPs1Path $installedLauncherPs1Path) -NoNewline
+    Set-Content -LiteralPath $codexShPath -Value (New-CodexShWrapperContent -InstalledLauncherPs1Path $installedLauncherPs1Path) -NoNewline
 
     $pathUpdated = Add-UserPathEntry -PathEntry $binDir
 
